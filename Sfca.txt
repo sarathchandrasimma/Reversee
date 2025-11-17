@@ -1,0 +1,114 @@
+-- 1. Set the context (optional; adjust to your database/schema)
+USE DATABASE MY_DB;
+USE SCHEMA MY_SCHEMA;
+
+-- 2. Create example tables for CSV, JSON and Parquet
+CREATE OR REPLACE TABLE csv_table (
+  id INT,
+  name STRING,
+  department STRING,
+  percentage FLOAT
+);
+
+CREATE OR REPLACE TABLE json_table (
+  id INT,
+  name STRING,
+  department STRING,
+  details VARIANT    -- VARIANT stores semi-structured JSON
+);
+
+CREATE OR REPLACE TABLE parquet_table (
+  id INT,
+  name STRING,
+  department STRING,
+  score FLOAT
+);
+
+-- 3. Create (or replace) file formats
+-- CSV: skip header row; treat double-quotes as optional field enclosure
+CREATE OR REPLACE FILE FORMAT csv_format
+  TYPE = 'CSV'
+  FIELD_DELIMITER = ','
+  SKIP_HEADER = 1
+  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+  NULL_IF = ('NULL', '');
+
+-- JSON: newline-delimited JSON or JSON array handling
+CREATE OR REPLACE FILE FORMAT json_format
+  TYPE = 'JSON'
+  STRIP_OUTER_ARRAY = TRUE;  -- if your file is an array of objects, set to TRUE
+
+-- PARQUET: Snowflake autodetects schema for Parquet
+CREATE OR REPLACE FILE FORMAT parquet_format
+  TYPE = 'PARQUET';
+
+-- 4. Create an internal stage and upload files via the web UI or put command (if using SnowSQL).
+-- For demo, we create a named internal stage:
+CREATE OR REPLACE STAGE my_stage
+  FILE_FORMAT = (format_name = csv_format);
+
+-- After creating the stage, upload your files into the stage:
+-- (Use Snowflake Web UI: "Upload" into the stage, or SnowSQL: PUT file://local/path @my_stage)
+
+-- 5. COPY data from CSV into csv_table
+COPY INTO csv_table
+  FROM @my_stage/csv_files/your_csv_file.csv   -- use the actual path in the stage
+  FILE_FORMAT = (FORMAT_NAME = csv_format)
+  ON_ERROR = 'ABORT_STATEMENT';  -- other options: 'CONTINUE', 'SKIP_FILE', etc.
+
+-- 6. COPY data from JSON into json_table
+-- If JSON file contains fields: id, name, department, details (where details is an object),
+-- you can use a SELECT from the staged file to parse/flatten into columns.
+COPY INTO json_table
+  FROM (
+    SELECT
+      t.$1:id::INT            AS id,
+      t.$1:name::STRING       AS name,
+      t.$1:department::STRING AS department,
+      t.$1:details::VARIANT   AS details
+    FROM @my_stage/json_files/your_json_file.json (FILE_FORMAT => 'json_format') t
+  );
+
+-- 7. COPY data from Parquet into parquet_table
+-- Parquet often contains column names which map directly to table columns. Use COPY INTO directly.
+COPY INTO parquet_table
+  FROM @my_stage/parquet_files/your_parquet_file.parquet
+  FILE_FORMAT = (FORMAT_NAME = parquet_format)
+  ON_ERROR = 'ABORT_STATEMENT';
+
+-- 8. Example SELECTs to verify loaded data
+SELECT * FROM csv_table ORDER BY id;
+SELECT * FROM json_table ORDER BY id;
+SELECT * FROM parquet_table ORDER BY id;
+
+
+
+USE DATABASE MY_DB;
+USE SCHEMA MY_SCHEMA;
+
+-- Create clustered table: cluster by sale_date (good when you frequently filter BY sale_date)
+CREATE OR REPLACE TABLE clustered_sales_data (
+  sale_id INT,
+  product STRING,
+  amount FLOAT,
+  sale_date DATE
+)
+CLUSTER BY (sale_date);   -- specify clustering key(s) here
+
+-- Insert sample data
+INSERT INTO clustered_sales_data (sale_id, product, amount, sale_date)
+VALUES
+  (1, 'Laptop',     1000, '2025-04-19'),
+  (2, 'Mobile',      500, '2025-04-19'),
+  (3, 'Headphones',  150, '2025-04-19'),
+  (4, 'Laptop',      950, '2025-04-20'),
+  (5, 'Mobile',      650, '2025-04-20');
+
+-- Query that benefits from clustering (range or equality filter on sale_date)
+SELECT *
+FROM clustered_sales_data
+WHERE sale_date = '2025-04-19';
+
+-- If you want to see clustering metadata (approximate): use system functions
+-- Note: CLUSTERING_INFORMATION is available on ACCOUNTADMIN or with appropriate grants
+SELECT SYSTEM$CLUSTERING_INFORMATION('MY_DB.MY_SCHEMA.CLUSTERED_SALES_DATA');
